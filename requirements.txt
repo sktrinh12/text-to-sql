@@ -1,0 +1,24 @@
+# ── Core LangGraph stack ──────────────────────────────────────────────────
+langgraph>=0.2.0
+langchain-core>=0.2.0
+
+# ── MCP integration ───────────────────────────────────────────────────────
+mcp>=1.0.0                      # FastMCP server
+langchain-mcp-adapters>=0.1.0   # MultiServerMCPClient for LangGraph
+
+# ── Free-tier LLM providers (install at least one) ───────────────────────
+# Option A — Groq (default, recommended for POC)
+langchain-groq>=0.1.0
+
+# Option B — Google Gemini Flash (uncomment if preferred)
+# langchain-google-genai>=1.0.0
+
+# ── SQL tooling (unchanged from original) ────────────────────────────────
+sqlglot>=23.0.0
+
+# ── Database drivers (add the one matching DB_DIALECT) ───────────────────
+# SQLite is bundled with Python — no extra package needed
+# psycopg2-binary>=2.9.0    # PostgreSQL
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0            # load .env for local dev
