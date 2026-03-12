@@ -1,18 +1,24 @@
 """
 LangGraph nodes — each node is a plain async function that reads GraphState
 and returns a partial state update dict.
+
+MCP tools are called via mcp2cli subprocess calls instead of
+langchain-mcp-adapters. This avoids injecting tool schemas into the LLM
+context and removes the MultiServerMCPClient overhead entirely.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import shutil
+import subprocess
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
 
-from .config import JSON_COLUMN_HINTS
+from .config import JSON_COLUMN_HINTS, MCP_SERVER_URL
 from .llm_factory import get_llm
 from .state import GraphState
 
@@ -20,17 +26,75 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# mcp2cli helper
 # ---------------------------------------------------------------------------
 
-def _find_tool(tools: list[BaseTool], name: str) -> BaseTool:
-    for t in tools:
-        if t.name == name:
-            return t
-    raise RuntimeError(
-        f"MCP tool '{name}' not found. Available: {[t.name for t in tools]}"
-    )
+def _mcp2cli(tool_name: str, args: dict[str, str] | None = None) -> dict[str, Any]:
+    """
+    Call an MCP tool via mcp2cli and return the parsed JSON result.
 
+    Uses --pretty for readable output and --transport streamable to match
+    the server transport we configured.
+
+    Raises RuntimeError if mcp2cli is not installed or the call fails.
+    """
+    if shutil.which("mcp2cli") is None:
+        raise RuntimeError(
+            "mcp2cli not found. Install it with: pip install mcp2cli"
+        )
+
+    cmd = [
+        "mcp2cli",
+        "--mcp", MCP_SERVER_URL,
+        "--transport", "streamable",
+        tool_name.replace("_", "-"),  # load_schema → load-schema
+    ]
+
+    stdin_data = None
+    if args:
+        for key, value in args.items():
+            kebab_key = key.replace("_", "-")  # sql_query → sql-query
+            # For long/multiline values (e.g. SQL), pass via --stdin as JSON
+            # to avoid shell quoting issues
+            if "\n" in value or len(value) > 200:
+                import json as _json
+                stdin_data = _json.dumps({key: value})
+                cmd.append("--stdin")
+            else:
+                cmd.extend([f"--{kebab_key}", value])
+
+    logger.debug("[mcp2cli] Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True,
+                            input=stdin_data)
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"mcp2cli call to '{tool_name}' failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+
+    raw = result.stdout.strip()
+    if not raw:
+        raise RuntimeError(f"mcp2cli returned empty output for tool '{tool_name}'")
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"mcp2cli output for '{tool_name}' is not valid JSON: {raw[:200]}"
+        ) from exc
+
+
+async def _mcp2cli_async(tool_name: str, args: dict[str, str] | None = None) -> dict[str, Any]:
+    """Async wrapper — runs _mcp2cli in a thread so it doesn't block the event loop."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _mcp2cli, tool_name, args)
+
+
+# ---------------------------------------------------------------------------
+# SQL cleaning helper
+# ---------------------------------------------------------------------------
 
 def _clean_sql(raw: str) -> str:
     """Strip markdown fences and normalise whitespace."""
@@ -45,43 +109,11 @@ def _clean_sql(raw: str) -> str:
     return cleaned
 
 
-def _parse_tool_result(raw: Any) -> dict[str, Any]:
-    """
-    Normalise whatever langchain-mcp-adapters hands back from tool.ainvoke():
-      - str  → our JSON string from the server, parse it
-      - list → [TextContent(...)] from MCP protocol, grab .text of first item
-      - dict → already parsed, return as-is
-    """
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        return json.loads(raw)
-    if isinstance(raw, list):
-        for item in raw:
-            text = getattr(item, "text", None)
-            if text is None and isinstance(item, dict):
-                text = item.get("text")
-            if text:
-                return json.loads(text)
-        raise ValueError(f"No text found in MCP result list: {raw}")
-    raise TypeError(f"Unexpected MCP tool result type {type(raw)}: {raw}")
-
+# ---------------------------------------------------------------------------
+# JSON column hints for LLM prompts
+# ---------------------------------------------------------------------------
 
 def _build_json_hints_block() -> str:
-    """
-    Build a human-readable section describing every known JSON/JSONB column
-    and its internal keys.  Injected into both generator and corrector prompts.
-
-    Example output
-    --------------
-    ## JSON / JSONB Column Reference
-
-    ### Table: eln_writeup_api_extract  →  Column: summary_data  (JSONB)
-    Access values with:  summary_data->>'KEY'  (returns TEXT)
-    Available keys and their meaning:
-      • COMPLETED_ISID   — User ID of the person who completed ...
-      ...
-    """
     if not JSON_COLUMN_HINTS:
         return ""
 
@@ -102,39 +134,39 @@ def _build_json_hints_block() -> str:
 
     for table, cols in JSON_COLUMN_HINTS.items():
         for col, keys in cols.items():
-            lines.append(f"### Table: {table}  →  Column: {col}  (TEXT containing JSON)")
+            lines.append(f"### Table: {table}  \u2192  Column: {col}  (TEXT containing JSON)")
             lines.append(f"Access with:  {col}::jsonb->>'KEY'  (MUST include ::jsonb cast)")
             lines.append("Available keys:")
             for key, description in keys.items():
-                lines.append(f"  • {key:<22} — {description}")
+                lines.append(f"  \u2022 {key:<22} \u2014 {description}")
             lines.append("")
 
     return "\n".join(lines)
 
 
-_JSON_HINTS = _build_json_hints_block()   # built once at import time
+_JSON_HINTS = _build_json_hints_block()
 
 
 # ---------------------------------------------------------------------------
 # Node: extract_schema
 # ---------------------------------------------------------------------------
 
-async def extract_schema(state: GraphState, mcp_tools: list[BaseTool]) -> dict[str, Any]:
-    """Calls the load_schema MCP tool and stores DDL + sqlglot schema in state."""
-    logger.info("[extract_schema] Loading schema via MCP.")
-    tool = _find_tool(mcp_tools, "load_schema")
-    raw = await tool.ainvoke({})
-    payload: dict[str, Any] = _parse_tool_result(raw)
-
-    if payload.get("status") == "error":
-        logger.error("[extract_schema] %s", payload.get("error"))
-        return {"schema_ddl": "", "sqlglot_schema": {}, "error": payload.get("error")}
-
-    return {
-        "schema_ddl": payload["ddl"],
-        "sqlglot_schema": payload["sqlglot_schema"],
-        "error": None,
-    }
+async def extract_schema(state: GraphState) -> dict[str, Any]:
+    """Calls the load_schema MCP tool via mcp2cli."""
+    logger.info("[extract_schema] Loading schema via mcp2cli.")
+    try:
+        payload = await _mcp2cli_async("load_schema")
+        if payload.get("status") == "error":
+            logger.error("[extract_schema] %s", payload.get("error"))
+            return {"schema_ddl": "", "sqlglot_schema": {}, "error": payload.get("error")}
+        return {
+            "schema_ddl": payload["ddl"],
+            "sqlglot_schema": payload["sqlglot_schema"],
+            "error": None,
+        }
+    except Exception as exc:
+        logger.error("[extract_schema] %s", exc)
+        return {"schema_ddl": "", "sqlglot_schema": {}, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +185,7 @@ correct PostgreSQL SELECT query that fully answers the question.
 Rules:
 1. Respond ONLY with the SQL — no markdown, no explanation, no preamble.
 2. Use ONLY tables and columns that exist in the schema below.
-3. For JSONB columns use the ->> operator (see JSON reference below).
+3. For JSONB columns use the ::jsonb cast (see JSON reference below).
 4. Add clear column aliases in SELECT so results are readable.
 
 ## Database Schema (source of truth)
@@ -171,6 +203,7 @@ Rules:
         "iteration_count": 0,
         "validation_result": None,
         "execution_result": None,
+        "result_columns": None,
         "final_sql_query": None,
     }
 
@@ -179,13 +212,14 @@ Rules:
 # Node: validate_sql
 # ---------------------------------------------------------------------------
 
-async def validate_sql(state: GraphState, mcp_tools: list[BaseTool]) -> dict[str, Any]:
-    """Calls the validate_sql MCP tool."""
+async def validate_sql(state: GraphState) -> dict[str, Any]:
+    """Calls the validate_sql MCP tool via mcp2cli."""
     sql = state.get("sql_query", "")
     logger.info("[validate_sql] %s", sql)
-    tool = _find_tool(mcp_tools, "validate_sql")
-    raw = await tool.ainvoke({"sql_query": sql})
-    result: dict[str, Any] = _parse_tool_result(raw)
+    try:
+        result = await _mcp2cli_async("validate_sql", {"sql_query": sql})
+    except Exception as exc:
+        result = {"status": "error", "errors": [str(exc)]}
     logger.info("[validate_sql] result=%s", result)
     return {"validation_result": result}
 
@@ -194,13 +228,14 @@ async def validate_sql(state: GraphState, mcp_tools: list[BaseTool]) -> dict[str
 # Node: execute_sql
 # ---------------------------------------------------------------------------
 
-async def execute_sql(state: GraphState, mcp_tools: list[BaseTool]) -> dict[str, Any]:
-    """Calls the execute_sql MCP tool; marks final_sql_query on success."""
+async def execute_sql(state: GraphState) -> dict[str, Any]:
+    """Calls the execute_sql MCP tool via mcp2cli; marks final_sql_query on success."""
     sql = state.get("sql_query", "")
     logger.info("[execute_sql] %s", sql)
-    tool = _find_tool(mcp_tools, "execute_sql")
-    raw = await tool.ainvoke({"sql_query": sql})
-    result: dict[str, Any] = _parse_tool_result(raw)
+    try:
+        result = await _mcp2cli_async("execute_sql", {"sql_query": sql})
+    except Exception as exc:
+        result = {"status": "error", "error_message": str(exc)}
     logger.info("[execute_sql] status=%s", result.get("status"))
 
     update: dict[str, Any] = {"execution_result": result}
@@ -225,7 +260,7 @@ async def correct_sql(state: GraphState) -> dict[str, Any]:
 Correction priority:
 1. Execution error from the database is the most reliable signal — fix it first.
 2. Follow the schema strictly; never guess table or column names.
-3. For JSONB columns always use ->> (extract as TEXT) or -> (extract as JSON).
+3. For JSONB columns always use ::jsonb cast before ->> or -> operators.
 4. Respond ONLY with the corrected SQL — no markdown, no explanation.
 
 ## Database Schema (source of truth)
