@@ -6,6 +6,9 @@ langchain-core>=0.2.0
 mcp>=1.0.0                      # FastMCP server
 langchain-mcp-adapters>=0.1.0   # MultiServerMCPClient for LangGraph
 
+# ── MCP client (replaces langchain-mcp-adapters) ─────────────────────────
+mcp2cli                         # pip install mcp2cli
+
 # ── Free-tier LLM providers (install at least one) ───────────────────────
 # Option A — Groq (default, recommended for POC)
 langchain-groq>=0.1.0
