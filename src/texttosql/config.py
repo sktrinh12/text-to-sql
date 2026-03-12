@@ -31,6 +31,7 @@ GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 # ── MCP ───────────────────────────────────────────────────────────────────────
 # Path to the MCP server entry point; used by the MultiServerMCPClient.
 MCP_SERVER_SCRIPT: str = os.path.join(os.path.dirname(__file__), "mcp_server.py")
+MCP_SERVER_URL: str = os.environ.get("MCP_SERVER_URL", "http://localhost:3001/mcp")
 
 # ── Loop guard ────────────────────────────────────────────────────────────────
 MAX_CORRECTION_ITERATIONS: int = int(os.getenv("MAX_CORRECTION_ITERATIONS", "3"))
