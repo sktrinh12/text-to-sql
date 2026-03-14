@@ -1,0 +1,26 @@
+[project]
+# Name shown in the browser tab and header
+name = "Text-to-SQL"
+
+[UI]
+# Text shown next to the logo in the header
+name = "Text-to-SQL"
+
+# Tagline shown on the welcome screen (under the logo)
+description = "Ask questions about the database in plain English."
+
+# Collapse the chain-of-thought steps by default (keeps UI clean)
+default_collapse_content = true
+
+# "light" or "dark"
+default_theme = "dark"
+
+# Path to logo — place the file in public/logo.png
+# logo = "/public/logo.png"
+
+[UI.theme]
+# Primary brand colour (used for buttons, highlights)
+primary = "#1a73e8"
+
+[meta]
+generated_by = "1.0.0"
