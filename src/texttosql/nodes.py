@@ -187,6 +187,7 @@ Rules:
 2. Use ONLY tables and columns that exist in the schema below.
 3. For JSONB columns use the ::jsonb cast (see JSON reference below).
 4. Add clear column aliases in SELECT so results are readable.
+5. Use SELECT DISTINCT when fetching IDs or names to avoid duplicate rows.
 
 ## Database Schema (source of truth)
 {state['schema_ddl']}
