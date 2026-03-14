@@ -3,7 +3,8 @@
 A natural language to SQL agent that converts plain English questions into
 executable PostgreSQL queries. It introspects your live database schema,
 generates SQL via a free-tier LLM, validates it statically with SQLGlot,
-and executes it — with an automatic correction loop for queries that fail.
+and executes it (using mcp2cli in order to simplify code) — with an automatic correction loop for queries that fail. 
+Note `mcp2cli` is mainly used to economise on token usage but in this case it was used for simplicity.
 
 ## Architecture
 
@@ -179,7 +180,7 @@ generates the correct cast. The hints also document the JSON keys and their mean
 - "List experiment IDs where the notes mention the product was 'not consistent'."
 - "Count experiments per unique system_name where the write-up mentions silica gel chromatography."
 - "Show experiments where CREATED_DATE in summary_data differs from analysis_date."
-- "Show the average yield percentage in write-ups for scientist 'a.pl'."
+- "Show the average page value in write-ups for the countersigner a.pl"
 
 ## References
 
