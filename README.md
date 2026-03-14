@@ -4,7 +4,7 @@ A natural language to SQL agent that converts plain English questions into
 executable PostgreSQL queries. It introspects your live database schema,
 generates SQL via a free-tier LLM, validates it statically with SQLGlot,
 and executes it (using mcp2cli in order to simplify code) — with an automatic correction loop for queries that fail. 
-Note `mcp2cli` is mainly used to economise on token usage but in this case it was used for simplicity.
+Note `mcp2cli` is mainly used to economise on token usage but in this case it was used for simplicity. Since the design does not provide tool-calling for the LLM, that is, the workflow is deterministic — validate always runs, execute always follows a valid query. Giving the LLM agency over that would add non-determinism and potentially more LLM calls without improving results.
 
 ## Architecture
 
@@ -82,7 +82,7 @@ DB_URI=postgresql://user:pass@localhost:5432/prelude
 # LLM — Option A: Groq (default, free tier) — https://console.groq.com
 LLM_PROVIDER=groq
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.1-8b-instant   # or llama-3.1-70b-versatile, mixtral-8x7b-32768
+GROQ_MODEL=llama-3.3-70b-versatile # mixtral-8x7b-32768
 
 # LLM — Option B: Google Gemini Flash (free tier) — https://aistudio.google.com
 # LLM_PROVIDER=gemini
