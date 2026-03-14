@@ -162,6 +162,9 @@ Rules:
 
     human = HumanMessage(content=state["message"])
     response = await llm.ainvoke([system, human])
+    usage = response.response_metadata.get("token_usage", {})
+    logger.info("[generate_sql] tokens — prompt=%s completion=%s",
+                usage.get("prompt_tokens"), usage.get("completion_tokens"))
     raw = response.content if isinstance(response.content, str) else str(response.content)
     cleaned = _clean_sql(raw)
     logger.info("[generate_sql] -> %s", cleaned)
