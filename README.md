@@ -114,6 +114,10 @@ python -m texttosql.main "How many experiments were completed by a.pl?"
 
 # Or launch the interactive REPL
 python -m texttosql.main
+
+# use of chainlit to interact with pretty frontend chat interface
+cd ui
+chainlit run chainlit_app.py
 ```
 
 ## File map
@@ -132,6 +136,13 @@ src/texttosql/
     ├── factory.py  ← Returns dialect instance based on DB_DIALECT env var
     ├── engine.py   ← SQLValidator (SQLGlot) + SQLExecutor (psycopg2)
     └── postgres.py ← PostgreSQL dialect: schema introspection, type mapping
+
+
+ui/
+├── chainlit.md
+├── chainlit_app.py
+├── config.toml
+└── custom.css
 ```
 
 ## MCP tools
