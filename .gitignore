@@ -13,3 +13,6 @@ env/
 # Chainlit specific
 .chainlit/
 chainlit.db
+
+# chainlit files
+.files
