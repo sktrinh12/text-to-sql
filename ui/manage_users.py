@@ -3,7 +3,7 @@ User management CLI for the Chainlit app.
 
 Usage
 -----
-# Create the table (run once)
+# Create tables (app_users + Chainlit chat history tables)
 python -m texttosql.manage_users init
 
 # Add a user
@@ -42,13 +42,87 @@ def _verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
-DDL = """
+DDL_APP_USERS = """
 CREATE TABLE IF NOT EXISTS app_users (
     username      TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
     role          TEXT NOT NULL DEFAULT 'scientist',
     display_name  TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+
+DDL_CHAINLIT = """
+-- Chainlit SQLAlchemyDataLayer tables for chat history persistence
+
+CREATE TABLE IF NOT EXISTS users (
+    "id" UUID PRIMARY KEY,
+    "identifier" TEXT NOT NULL UNIQUE,
+    "metadata" JSONB NOT NULL,
+    "createdAt" TEXT
+);
+
+CREATE TABLE IF NOT EXISTS threads (
+    "id" UUID PRIMARY KEY,
+    "createdAt" TEXT,
+    "name" TEXT,
+    "userId" UUID,
+    "userIdentifier" TEXT,
+    "tags" TEXT[],
+    "metadata" JSONB,
+    FOREIGN KEY ("userId") REFERENCES users("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS steps (
+    "id" UUID PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "threadId" UUID NOT NULL,
+    "parentId" UUID,
+    "streaming" BOOLEAN NOT NULL,
+    "waitForAnswer" BOOLEAN,
+    "isError" BOOLEAN,
+    "metadata" JSONB,
+    "tags" TEXT[],
+    "input" TEXT,
+    "output" TEXT,
+    "createdAt" TEXT,
+    "command" TEXT,
+    "start" TEXT,
+    "end" TEXT,
+    "generation" JSONB,
+    "showInput" TEXT,
+    "language" TEXT,
+    "indent" INT,
+    "defaultOpen" BOOLEAN,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS elements (
+    "id" UUID PRIMARY KEY,
+    "threadId" UUID,
+    "type" TEXT,
+    "url" TEXT,
+    "chainlitKey" TEXT,
+    "name" TEXT NOT NULL,
+    "display" TEXT,
+    "objectKey" TEXT,
+    "size" TEXT,
+    "page" INT,
+    "language" TEXT,
+    "forId" UUID,
+    "mime" TEXT,
+    "props" JSONB,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS feedbacks (
+    "id" UUID PRIMARY KEY,
+    "forId" UUID NOT NULL,
+    "threadId" UUID NOT NULL,
+    "value" INT NOT NULL,
+    "comment" TEXT,
+    FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
 );
 """
 
@@ -60,13 +134,15 @@ def _conn():
 def cmd_init(_args) -> None:
     with _conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(DDL)
-    print("✅  app_users table ready.")
+            cur.execute(DDL_APP_USERS)
+        with conn.cursor() as cur:
+            cur.execute(DDL_CHAINLIT)
+    print("✅  app_users and Chainlit tables ready.")
 
 
 def cmd_add(args) -> None:
     display = args.display_name or args.username
-    hashed = _hash_password(args.password) 
+    hashed = _hash_password(args.password)
     try:
         with _conn() as conn:
             with conn.cursor() as cur:
