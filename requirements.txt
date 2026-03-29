@@ -28,3 +28,9 @@ python-dotenv>=1.0.0            # load .env for local dev
 
 # ── Frontend Chat ─────────────────────────────────────────────────────────
 chainlit>=2.10.0
+
+# for chat history persistence
+asyncpg>=0.31.0
+
+# for plotting
+plotly>=6.6.0
