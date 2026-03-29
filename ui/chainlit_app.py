@@ -8,10 +8,10 @@ Requirements:
     pip install chainlit passlib bcrypt asyncpg sqlalchemy
 
 Environment variables (add to .env):
-    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/prelude
     DB_URI=postgresql://postgres:postgres@localhost:5432/prelude
 
-The DATABASE_URL uses the asyncpg driver (required by SQLAlchemyDataLayer).
+The PostgreSQL DB uses the asyncpg driver (required by SQLAlchemyDataLayer).
+
 The DB_URI uses the standard psycopg2 driver (used by the SQL pipeline).
 Both can point at the same database.
 
@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 from manage_users import _verify_password
 
 from texttosql.graph import run_pipeline
+from texttosql.viz import wants_visualization, create_chart
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -93,11 +94,13 @@ def auth_callback(username: str, password: str) -> cl.User | None:
 
 @cl.data_layer
 def get_data_layer() -> SQLAlchemyDataLayer | None:
-    conninfo = os.getenv("DATABASE_URL")
+    conninfo = os.getenv("DB_URI")
     if not conninfo:
-        logger.warning("DATABASE_URL not set — chat history will not be persisted.")
+        logger.warning("DB_URI not set — chat history will not be persisted.")
         return None
-    return SQLAlchemyDataLayer(conninfo=conninfo)
+    if conninfo.startswith("postgresql://"):
+        conninfo = conninfo.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return SQLAlchemyDataLayer(conninfo=conninfo, storage_provider=None)
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +116,23 @@ async def on_chat_start() -> None:
         content=(
             f"👋 Hi **{name}**! Ask me anything about the ELN database in plain English.\n"
         )
+    ).send()
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: dict) -> None:
+    user = cl.user_session.get("user")
+    thread_id = thread.get("id")
+    logger.info(
+        "Resuming thread %s for user %s (metadata=%s)",
+        thread_id,
+        user.identifier if user else "unknown",
+        thread.get("metadata"),
+    )
+    cl.user_session.set("thread_id", thread_id)
+    name = user.metadata.get("display_name", user.identifier) if user else "there"
+    await cl.Message(
+        content=(f"👋 Welcome back **{name}**! Continuing our conversation.\n")
     ).send()
 
 
@@ -132,11 +152,35 @@ async def on_chat_end() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _format_value(v: Any, decimals: int = 2) -> str:
+    """Format a value for display, rounding floats to specified decimal places."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, float):
+        return str(round(v, decimals))
+    return str(v)
+
+
 @cl.on_message
 async def on_message(message: cl.Message) -> None:
-    async with cl.Step(name="Text-to-SQL pipeline") as step:
-        state = await run_pipeline(message.content)
-        step.output = state.get("final_sql_query") or "No SQL generated"
+    user = cl.user_session.get("user")
+    if not user:
+        await cl.Message(content="Please log in to continue the conversation.").send()
+        return
+    thread_id = cl.user_session.get("thread_id") or (
+        message.thread_id if hasattr(message, "thread_id") else None
+    )
+    logger.info(
+        "on_message: user=%s, thread=%s", user.identifier if user else None, thread_id
+    )
+    try:
+        async with cl.Step(name="Text-to-SQL pipeline") as step:
+            state = await run_pipeline(message.content)
+            step.output = state.get("final_sql_query") or "No SQL generated"
+    except Exception as exc:
+        logger.exception("Error processing message: %s", exc)
+        await cl.Message(content=f"Error: {exc}").send()
+        return
 
     final_sql = state.get("final_sql_query")
     exec_result = state.get("execution_result") or {}
@@ -148,13 +192,35 @@ async def on_message(message: cl.Message) -> None:
 
         sql_block = f"```sql\n{final_sql}\n```"
 
+        if wants_visualization(message.content) and rows and columns:
+            try:
+                fig = create_chart(columns, rows)
+                elements = [cl.Plotly(name="chart", figure=fig, display="inline")]
+
+                header = "| " + " | ".join(str(c) for c in columns) + " |"
+                separator = "| " + " | ".join("---" for _ in columns) + " |"
+                data_rows = [
+                    "| " + " | ".join(_format_value(v) for v in row) + " |"
+                    for row in rows[:50]
+                ]
+                table = "\n".join([header, separator] + data_rows)
+                truncation = (
+                    f"\n\n*Showing 50 of {row_count} rows.*" if row_count > 50 else ""
+                )
+                raw_data = f"**Raw data ({row_count} rows)**\n{table}{truncation}"
+
+                await cl.Message(
+                    content=sql_block + "\n\n" + raw_data, elements=elements
+                ).send()
+                return
+            except Exception as exc:
+                logger.warning("Chart generation failed: %s", exc)
+
         if columns and rows:
             header = "| " + " | ".join(str(c) for c in columns) + " |"
             separator = "| " + " | ".join("---" for _ in columns) + " |"
             data_rows = [
-                "| "
-                + " | ".join(str(v) if v is not None else "NULL" for v in row)
-                + " |"
+                "| " + " | ".join(_format_value(v) for v in row) + " |"
                 for row in rows[:50]
             ]
             table = "\n".join([header, separator] + data_rows)
