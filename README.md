@@ -15,7 +15,7 @@ Note `mcp2cli` is mainly used to economise on token usage but in this case it wa
 | **SQL cleaning** | `_clean_sql()` helper strips markdown fences before execution |
 | **MCP server** | `FastMCP` exposes `load_schema`, `validate_sql`, `execute_sql` |
 | **MCP client** | `mcp2cli` subprocess calls — no tool schemas injected into LLM context |
-| **LLM** | Groq free tier (`llama-3.1-8b-instant`) or Google Gemini Flash |
+| **LLM** | Groq free tier (`llama-3.3-70b-versatile`) or Google Gemini Flash |
 | **Validation** | SQLGlot static + semantic validation against live schema |
 
 ## Graph topology
@@ -67,7 +67,21 @@ if you add more tools or connect to additional MCP servers in future.
 pip install -e .
 ```
 
-### 2. Configure environment
+### 2. Initialize database tables
+
+```bash
+# Create app_users table and Chainlit chat history tables
+python -m texttosql.manage_users init
+
+# Add users
+python -m texttosql.manage_users add r.shetty mysecretpass scientist
+python -m texttosql.manage_users add admin adminpass admin "Admin User"
+
+# List users
+python -m texttosql.manage_users list
+```
+
+### 3. Configure environment
 
 Create a `.env` file in the project root:
 
@@ -90,7 +104,7 @@ GROQ_MODEL=llama-3.3-70b-versatile # mixtral-8x7b-32768
 # GEMINI_MODEL=gemini-1.5-flash
 ```
 
-### 3. Seed sample data (optional)
+### 4. Seed sample data (optional)
 
 To load the anonymised AetherGen biotech dataset (218 rows) into the local
 PostgreSQL instance:
@@ -103,7 +117,7 @@ cat seed_data.sql | docker exec -i <container> psql -U postgres -d <dbname>
 psql -h localhost -U postgres -d <dbname> -f seed_data.sql
 ```
 
-### 4. Run
+### 5. Run
 
 ```bash
 # Terminal 1 — start the MCP server (keep running)
@@ -115,10 +129,16 @@ python -m texttosql.main "How many experiments were completed by a.pl?"
 # Or launch the interactive REPL
 python -m texttosql.main
 
-# use of chainlit to interact with pretty frontend chat interface
+# Or launch the Chainlit UI (from ui/ directory)
 cd ui
 chainlit run chainlit_app.py
 ```
+
+### Visualizations
+
+When using the Chainlit UI, queries that return numeric/categorical data will
+automatically generate interactive Plotly charts. The raw data table is also
+displayed below each chart for reference.
 
 ## File map
 
@@ -131,6 +151,7 @@ src/texttosql/
 ├── nodes.py        ← LangGraph node functions (calls MCP tools via mcp2cli)
 ├── graph.py        ← StateGraph definition and run_pipeline() entry point
 ├── main.py         ← CLI / interactive REPL
+├── viz.py          ← Plotly chart generation from query results
 └── dialects/
     ├── dialect.py  ← Abstract base class for database dialects
     ├── factory.py  ← Returns dialect instance based on DB_DIALECT env var
@@ -142,7 +163,8 @@ ui/
 ├── chainlit.md
 ├── chainlit_app.py
 ├── config.toml
-└── custom.css
+├── manage_users.py   # User management CLI
+└── public/          # Static assets
 ```
 
 ## MCP tools
@@ -192,6 +214,7 @@ generates the correct cast. The hints also document the JSON keys and their mean
 - "Count experiments per unique system_name where the write-up mentions silica gel chromatography."
 - "Show experiments where CREATED_DATE in summary_data differs from analysis_date."
 - "Show the average page value in write-ups for the countersigner a.pl"
+- "Show me barplot of all scientists and how many unique experiments they completed."
 
 ## References
 
