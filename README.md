@@ -6,6 +6,8 @@ generates SQL via a free-tier LLM, validates it statically with SQLGlot,
 and executes it (using mcp2cli in order to simplify code) — with an automatic correction loop for queries that fail. 
 Note `mcp2cli` is mainly used to economise on token usage but in this case it was used for simplicity. Since the design does not provide tool-calling for the LLM, that is, the workflow is deterministic — validate always runs, execute always follows a valid query. Giving the LLM agency over that would add non-determinism and potentially more LLM calls without improving results.
 
+![chat-image](./chat-image.png)
+
 ## Architecture
 
 | Concept | Implementation |
