@@ -6,6 +6,7 @@ MCP tools are called via mcp2cli subprocess calls instead of
 langchain-mcp-adapters. This avoids injecting tool schemas into the LLM
 context and removes the MultiServerMCPClient overhead entirely.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 # mcp2cli helper
 # ---------------------------------------------------------------------------
 
+
 def _mcp2cli(tool_name: str, args: dict[str, str] | None = None) -> dict[str, Any]:
     """
     Call an MCP tool via mcp2cli and return the parsed JSON result.
@@ -39,14 +41,14 @@ def _mcp2cli(tool_name: str, args: dict[str, str] | None = None) -> dict[str, An
     Raises RuntimeError if mcp2cli is not installed or the call fails.
     """
     if shutil.which("mcp2cli") is None:
-        raise RuntimeError(
-            "mcp2cli not found. Install it with: pip install mcp2cli"
-        )
+        raise RuntimeError("mcp2cli not found. Install it with: pip install mcp2cli")
 
     cmd = [
         "mcp2cli",
-        "--mcp", MCP_SERVER_URL,
-        "--transport", "streamable",
+        "--mcp",
+        MCP_SERVER_URL,
+        "--transport",
+        "streamable",
         tool_name.replace("_", "-"),  # load_schema → load-schema
     ]
 
@@ -58,14 +60,14 @@ def _mcp2cli(tool_name: str, args: dict[str, str] | None = None) -> dict[str, An
             # to avoid shell quoting issues
             if "\n" in value or len(value) > 200:
                 import json as _json
+
                 stdin_data = _json.dumps({key: value})
                 cmd.append("--stdin")
             else:
                 cmd.extend([f"--{kebab_key}", value])
 
     logger.debug("[mcp2cli] Running: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True,
-                            input=stdin_data)
+    result = subprocess.run(cmd, capture_output=True, text=True, input=stdin_data)
 
     if result.returncode != 0:
         raise RuntimeError(
@@ -86,7 +88,9 @@ def _mcp2cli(tool_name: str, args: dict[str, str] | None = None) -> dict[str, An
         ) from exc
 
 
-async def _mcp2cli_async(tool_name: str, args: dict[str, str] | None = None) -> dict[str, Any]:
+async def _mcp2cli_async(
+    tool_name: str, args: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Async wrapper — runs _mcp2cli in a thread so it doesn't block the event loop."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _mcp2cli, tool_name, args)
@@ -95,6 +99,7 @@ async def _mcp2cli_async(tool_name: str, args: dict[str, str] | None = None) -> 
 # ---------------------------------------------------------------------------
 # SQL cleaning helper
 # ---------------------------------------------------------------------------
+
 
 def _clean_sql(raw: str) -> str:
     """Strip markdown fences and normalise whitespace."""
@@ -112,6 +117,7 @@ def _clean_sql(raw: str) -> str:
 # ---------------------------------------------------------------------------
 # JSON column hints for LLM prompts
 # ---------------------------------------------------------------------------
+
 
 def _build_json_hints_block() -> str:
     if not JSON_COLUMN_HINTS:
@@ -134,8 +140,12 @@ def _build_json_hints_block() -> str:
 
     for table, cols in JSON_COLUMN_HINTS.items():
         for col, keys in cols.items():
-            lines.append(f"### Table: {table}  \u2192  Column: {col}  (TEXT containing JSON)")
-            lines.append(f"Access with:  {col}::jsonb->>'KEY'  (MUST include ::jsonb cast)")
+            lines.append(
+                f"### Table: {table}  \u2192  Column: {col}  (TEXT containing JSON)"
+            )
+            lines.append(
+                f"Access with:  {col}::jsonb->>'KEY'  (MUST include ::jsonb cast)"
+            )
             lines.append("Available keys:")
             for key, description in keys.items():
                 lines.append(f"  \u2022 {key:<22} \u2014 {description}")
@@ -151,6 +161,7 @@ _JSON_HINTS = _build_json_hints_block()
 # Node: extract_schema
 # ---------------------------------------------------------------------------
 
+
 async def extract_schema(state: GraphState) -> dict[str, Any]:
     """Calls the load_schema MCP tool via mcp2cli."""
     logger.info("[extract_schema] Loading schema via mcp2cli.")
@@ -158,7 +169,11 @@ async def extract_schema(state: GraphState) -> dict[str, Any]:
         payload = await _mcp2cli_async("load_schema")
         if payload.get("status") == "error":
             logger.error("[extract_schema] %s", payload.get("error"))
-            return {"schema_ddl": "", "sqlglot_schema": {}, "error": payload.get("error")}
+            return {
+                "schema_ddl": "",
+                "sqlglot_schema": {},
+                "error": payload.get("error"),
+            }
         return {
             "schema_ddl": payload["ddl"],
             "sqlglot_schema": payload["sqlglot_schema"],
@@ -173,12 +188,14 @@ async def extract_schema(state: GraphState) -> dict[str, Any]:
 # Node: generate_sql
 # ---------------------------------------------------------------------------
 
+
 async def generate_sql(state: GraphState) -> dict[str, Any]:
     """LLM generates the first SQL attempt from the user question."""
     logger.info("[generate_sql] question=%s", state.get("message"))
     llm = get_llm()
 
-    system = SystemMessage(content=f"""You are an expert PostgreSQL query writer.
+    system = SystemMessage(
+        content=f"""You are an expert PostgreSQL query writer.
 Given the user's question and the database schema, write a single syntactically
 correct PostgreSQL SELECT query that fully answers the question.
 
@@ -188,17 +205,27 @@ Rules:
 3. For JSONB columns use the ::jsonb cast (see JSON reference below).
 4. Add clear column aliases in SELECT so results are readable.
 5. Use SELECT DISTINCT when fetching IDs or names to avoid duplicate rows.
+6. CRITICAL: When searching for experimental conditions (reactions, procedures, 
+   temperatures, equipment like 'sealed tube', 'heated to 100C', etc.), 
+   ALWAYS search the WRITE_UP column — NOT EXPERIMENT_NAME. 
+   EXPERIMENT_NAME only contains the title, not the procedure details.
 
 ## Database Schema (source of truth)
-{state['schema_ddl']}
-{_JSON_HINTS}""")
+{state["schema_ddl"]}
+{_JSON_HINTS}"""
+    )
 
     human = HumanMessage(content=state["message"])
     response = await llm.ainvoke([system, human])
     usage = response.response_metadata.get("token_usage", {})
-    logger.info("[generate_sql] tokens — prompt=%s completion=%s",
-                usage.get("prompt_tokens"), usage.get("completion_tokens"))
-    raw = response.content if isinstance(response.content, str) else str(response.content)
+    logger.info(
+        "[generate_sql] tokens — prompt=%s completion=%s",
+        usage.get("prompt_tokens"),
+        usage.get("completion_tokens"),
+    )
+    raw = (
+        response.content if isinstance(response.content, str) else str(response.content)
+    )
     cleaned = _clean_sql(raw)
     logger.info("[generate_sql] -> %s", cleaned)
 
@@ -216,6 +243,7 @@ Rules:
 # Node: validate_sql
 # ---------------------------------------------------------------------------
 
+
 async def validate_sql(state: GraphState) -> dict[str, Any]:
     """Calls the validate_sql MCP tool via mcp2cli."""
     sql = state.get("sql_query", "")
@@ -231,6 +259,7 @@ async def validate_sql(state: GraphState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Node: execute_sql
 # ---------------------------------------------------------------------------
+
 
 async def execute_sql(state: GraphState) -> dict[str, Any]:
     """Calls the execute_sql MCP tool via mcp2cli; marks final_sql_query on success."""
@@ -253,13 +282,15 @@ async def execute_sql(state: GraphState) -> dict[str, Any]:
 # Node: correct_sql
 # ---------------------------------------------------------------------------
 
+
 async def correct_sql(state: GraphState) -> dict[str, Any]:
     """LLM corrects a failing SQL query using the error feedback."""
     iteration = state.get("iteration_count", 0) + 1
     logger.info("[correct_sql] attempt=%d", iteration)
     llm = get_llm()
 
-    system = SystemMessage(content=f"""You are a PostgreSQL expert correcting a failed SQL query.
+    system = SystemMessage(
+        content=f"""You are a PostgreSQL expert correcting a failed SQL query.
 
 Correction priority:
 1. Execution error from the database is the most reliable signal — fix it first.
@@ -268,18 +299,23 @@ Correction priority:
 4. Respond ONLY with the corrected SQL — no markdown, no explanation.
 
 ## Database Schema (source of truth)
-{state['schema_ddl']}
-{_JSON_HINTS}""")
+{state["schema_ddl"]}
+{_JSON_HINTS}"""
+    )
 
-    human = HumanMessage(content=(
-        f"Original question: {state.get('message')}\n\n"
-        f"Faulty SQL:\n{state.get('sql_query')}\n\n"
-        f"Validation errors: {json.dumps(state.get('validation_result'))}\n\n"
-        f"Execution error:   {json.dumps(state.get('execution_result'))}"
-    ))
+    human = HumanMessage(
+        content=(
+            f"Original question: {state.get('message')}\n\n"
+            f"Faulty SQL:\n{state.get('sql_query')}\n\n"
+            f"Validation errors: {json.dumps(state.get('validation_result'))}\n\n"
+            f"Execution error:   {json.dumps(state.get('execution_result'))}"
+        )
+    )
 
     response = await llm.ainvoke([system, human])
-    raw = response.content if isinstance(response.content, str) else str(response.content)
+    raw = (
+        response.content if isinstance(response.content, str) else str(response.content)
+    )
     cleaned = _clean_sql(raw)
     logger.info("[correct_sql] -> %s", cleaned)
 

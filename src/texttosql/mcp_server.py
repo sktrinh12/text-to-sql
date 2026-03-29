@@ -4,6 +4,7 @@ MCP Server — Text-to-SQL tools
 Start in one terminal:   python -m texttosql.mcp_server
 Run the agent in another: python -m texttosql.main "How many experiments?"
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from texttosql.config import DB_URI
+from texttosql.config import DB_URI, SCHEMA_TABLE_FILTER
 from texttosql.dialects.factory import get_dialect
 from texttosql.dialects.engine import SQLExecutor, SQLValidator
 
@@ -43,6 +44,7 @@ def _json_serial(obj: Any) -> str:
         return float(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
+
 # ---------------------------------------------------------------------------
 # FastMCP app
 # ---------------------------------------------------------------------------
@@ -54,6 +56,7 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 # Tool: load_schema
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def load_schema() -> str:
@@ -67,9 +70,13 @@ def load_schema() -> str:
     try:
         dialect = get_dialect()
         logger.info("load_schema: dialect=%s uri=%s", dialect.name, DB_URI)
-        ddl = dialect.get_ddl(DB_URI)
-        sqlglot_schema: dict[str, Any] = dialect.get_sqlglot_schema(DB_URI)
-        return json.dumps({"status": "success", "ddl": ddl, "sqlglot_schema": sqlglot_schema})
+        ddl = dialect.get_ddl(DB_URI, table_filter=SCHEMA_TABLE_FILTER)
+        sqlglot_schema: dict[str, Any] = dialect.get_sqlglot_schema(
+            DB_URI, table_filter=SCHEMA_TABLE_FILTER
+        )
+        return json.dumps(
+            {"status": "success", "ddl": ddl, "sqlglot_schema": sqlglot_schema}
+        )
     except Exception as exc:
         logger.error("load_schema failed: %s", exc, exc_info=True)
         return json.dumps({"status": "error", "error": str(exc)})
@@ -78,6 +85,7 @@ def load_schema() -> str:
 # ---------------------------------------------------------------------------
 # Tool: validate_sql
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def validate_sql(sql_query: str) -> str:
@@ -104,6 +112,7 @@ def validate_sql(sql_query: str) -> str:
 # Tool: execute_sql
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def execute_sql(sql_query: str) -> str:
     """
@@ -120,15 +129,20 @@ def execute_sql(sql_query: str) -> str:
         with dialect.get_connection(DB_URI) as conn:
             cursor = conn.cursor()
             cursor.execute(sql_query)
-            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            columns = (
+                [desc[0] for desc in cursor.description] if cursor.description else []
+            )
             rows = cursor.fetchall()
             serialisable = [list(row) for row in rows]
-            return json.dumps({
-                "status": "success",
-                "columns": columns,
-                "rows": serialisable,
-                "row_count": len(serialisable),
-            }, default=_json_serial)
+            return json.dumps(
+                {
+                    "status": "success",
+                    "columns": columns,
+                    "rows": serialisable,
+                    "row_count": len(serialisable),
+                },
+                default=_json_serial,
+            )
     except Exception as exc:
         logger.error("execute_sql failed: %s", exc, exc_info=True)
         return json.dumps({"status": "error", "error_message": str(exc)})

@@ -36,8 +36,12 @@ MCP_SERVER_URL: str = os.environ.get("MCP_SERVER_URL", "http://localhost:3001/mc
 # ── Loop guard ────────────────────────────────────────────────────────────────
 MAX_CORRECTION_ITERATIONS: int = int(os.getenv("MAX_CORRECTION_ITERATIONS", "3"))
 
+SCHEMA_TABLE_FILTER: list[str] = [
+    t.strip() for t in os.getenv("SCHEMA_TABLE_FILTER", "").split(",") if t.strip()
+]
+
 JSON_COLUMN_HINTS: dict = {
-    "eln_writeup_api_extract": {
+    "eln_writeup_api_anonymized": {
         "summary_data": {
             # ── Who did what ──────────────────────────────────────────────
             "ISID": "User/login ID of the experiment owner (e.g. 'r.shetty')",
@@ -46,6 +50,7 @@ JSON_COLUMN_HINTS: dict = {
             # ── Experiment identity ───────────────────────────────────────
             "EXPERIMENT_ID": "Numeric experiment identifier stored as text (e.g. '138844')",
             "EXPERIMENT_NAME": "Human-readable experiment name / title",
+            "WRITE_UP": "Full experiment write-up/procedure text — search here for experimental conditions like 'sealed tube', 'heated to 100C', reaction conditions, reagents, etc.",
             "PROTOCOL": "Protocol type used (e.g. 'ChemELN')",
             "PROTOCOL_ID": "Numeric protocol identifier stored as text (e.g. '81')",
             # ── Notebook location ─────────────────────────────────────────

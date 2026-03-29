@@ -1,6 +1,7 @@
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extensions import connection
+from typing import Optional
 
 from .dialect import DatabaseDialect
 
@@ -21,13 +22,19 @@ class PostgreSQLDialect(DatabaseDialect):
     def quote_identifier(self, name: str) -> str:
         return f'"{name}"'
 
-    def _get_ddl_from_db(self, db_uri: str) -> str:
+    def _get_ddl_from_db(
+        self, db_uri: str, table_filter: Optional[list[str]] = None
+    ) -> str:
         """Generates the DDL for the schema by querying information_schema."""
         with self.get_connection(db_uri) as conn:
             with conn.cursor() as cursor:
-                return self._build_ddl_from_info_schema(cursor)
+                return self._build_ddl_from_info_schema(cursor, table_filter)
 
-    def _build_ddl_from_info_schema(self, cursor: psycopg2.extensions.cursor) -> str:
+    def _build_ddl_from_info_schema(
+        self,
+        cursor: psycopg2.extensions.cursor,
+        table_filter: Optional[list[str]] = None,
+    ) -> str:
         """
         Queries catalog tables and assembles CREATE TABLE strings.
 
@@ -35,11 +42,21 @@ class PostgreSQLDialect(DatabaseDialect):
         so the LLM knows to use the ->> / -> operators rather than treating
         them as plain text.
         """
-        cursor.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' "
-            "ORDER BY table_name;"
-        )
+        if table_filter:
+            placeholders = ",".join(["%s"] * len(table_filter))
+            cursor.execute(
+                f"SELECT table_name FROM information_schema.tables "
+                f"WHERE table_schema = 'public' AND table_type = 'BASE TABLE' "
+                f"AND table_name IN ({placeholders}) "
+                f"ORDER BY table_name;",
+                table_filter,
+            )
+        else:
+            cursor.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' "
+                "ORDER BY table_name;"
+            )
         tables = [row[0] for row in cursor.fetchall()]
         if not tables:
             return ""
@@ -125,14 +142,14 @@ class PostgreSQLDialect(DatabaseDialect):
 
     def map_type_to_ddl(self, sql_type: str) -> str:
         mapping: dict[str, str] = {
-            "text":      "TEXT",
-            "number":    "NUMERIC",
-            "integer":   "INTEGER",
-            "boolean":   "BOOLEAN",
+            "text": "TEXT",
+            "number": "NUMERIC",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
             "timestamp": "TIMESTAMP",
-            "date":      "DATE",
-            "json":      "JSONB",
-            "jsonb":     "JSONB",
+            "date": "DATE",
+            "json": "JSONB",
+            "jsonb": "JSONB",
         }
         return mapping.get(sql_type.lower(), "TEXT")
 

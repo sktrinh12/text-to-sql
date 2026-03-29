@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 from sqlglot import exp, parse
 
@@ -15,41 +15,59 @@ class DatabaseDialect(ABC):
 
     # --- Public API (with caching) ---
 
-    def get_ddl(self, db_uri: str) -> str:
+    def get_ddl(self, db_uri: str, table_filter: Optional[list[str]] = None) -> str:
         """
         Extracts the database schema as a DDL string, using a cache.
         """
-        if db_uri not in self._schema_cache or "ddl" not in self._schema_cache[db_uri]:
-            self._ensure_schema_cached(db_uri)
-        return self._schema_cache[db_uri]["ddl"]
+        cache_key = self._make_cache_key(db_uri, table_filter)
+        if (
+            cache_key not in self._schema_cache
+            or "ddl" not in self._schema_cache[cache_key]
+        ):
+            self._ensure_schema_cached(db_uri, table_filter)
+        return self._schema_cache[cache_key]["ddl"]
 
-    def get_sqlglot_schema(self, db_uri: str) -> dict[str, dict[str, str]]:
+    def get_sqlglot_schema(
+        self, db_uri: str, table_filter: Optional[list[str]] = None
+    ) -> dict[str, dict[str, str]]:
         """
         Builds a SQLGlot MappingSchema by parsing the database's DDL, using a cache.
         """
+        cache_key = self._make_cache_key(db_uri, table_filter)
         if (
-            db_uri not in self._schema_cache
-            or "sqlglot_schema" not in self._schema_cache[db_uri]
+            cache_key not in self._schema_cache
+            or "sqlglot_schema" not in self._schema_cache[cache_key]
         ):
-            self._ensure_schema_cached(db_uri)
-        return self._schema_cache[db_uri]["sqlglot_schema"]
+            self._ensure_schema_cached(db_uri, table_filter)
+        return self._schema_cache[cache_key]["sqlglot_schema"]
 
-    def _ensure_schema_cached(self, db_uri: str) -> None:
+    def _make_cache_key(
+        self, db_uri: str, table_filter: Optional[list[str]] = None
+    ) -> str:
+        """Create a cache key that includes the table filter."""
+        if table_filter:
+            return f"{db_uri}:{','.join(sorted(table_filter))}"
+        return db_uri
+
+    def _ensure_schema_cached(
+        self, db_uri: str, table_filter: Optional[list[str]] = None
+    ) -> None:
         """
         Ensures both DDL and SQLGlot schema are cached for a given db_uri.
         This is the single point of entry for populating the cache.
         """
+        cache_key = self._make_cache_key(db_uri, table_filter)
         if (
-            db_uri in self._schema_cache
-            and "ddl" in self._schema_cache[db_uri]
-            and "sqlglot_schema" in self._schema_cache[db_uri]
+            cache_key in self._schema_cache
+            and "ddl" in self._schema_cache[cache_key]
+            and "sqlglot_schema" in self._schema_cache[cache_key]
         ):
             return  # Already fully cached
 
-        ddl_string = self._get_ddl_from_db(db_uri)
+        ddl_string = self._get_ddl_from_db(db_uri, table_filter)
         sqlglot_schema = self._parse_ddl_to_sqlglot_schema(ddl_string)
 
-        self._schema_cache[db_uri] = {
+        self._schema_cache[cache_key] = {
             "ddl": ddl_string,
             "sqlglot_schema": sqlglot_schema,
         }
@@ -73,7 +91,9 @@ class DatabaseDialect(ABC):
         pass
 
     @abstractmethod
-    def _get_ddl_from_db(self, db_uri: str) -> str:
+    def _get_ddl_from_db(
+        self, db_uri: str, table_filter: Optional[list[str]] = None
+    ) -> str:
         """
         The actual implementation for extracting the DDL from the database.
         This is called by the public get_ddl method.
