@@ -12,7 +12,7 @@ description = "Ask questions about the database in plain English."
 # Collapse the chain-of-thought steps by default (keeps UI clean)
 default_collapse_content = true
 
-custom_css = "/public/custom.css"
+# custom_css = "/public/custom.css"
 
 # "light" or "dark"
 default_theme = "dark"
